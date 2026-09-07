@@ -5,6 +5,7 @@ package httputils
 
 import (
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 )
@@ -58,48 +59,39 @@ func ParseStatusCodes(statusRanges string) ([]int, error) {
 	return statusCodes, nil
 }
 
-// ParseHeaders parses a comma-separated string of HTTP headers into a map.
+// ParseHeaders parses HTTP headers into an http.Header.
 //
 // Parameters:
-//   - headers: Comma-separated string of headers in "Key=Value" format.
-//     The value can be empty (e.g., "X-Empty-Header="), but the key must not be empty.
-//   - allowDuplicates: If true, the function will override the previous value with the new one. If false, the function will return an error if a duplicate header is encountered.
+//   - headers: Header entries in "Key=Value" format. Values may be empty, but keys must not be.
+//   - allowDuplicates: If true, duplicate header values are preserved. If false, duplicate keys return an error.
 //
 // Returns:
-//   - A map of header names to values, or an error if parsing fails.
-func ParseHeaders(headers string, allowDuplicates bool) (map[string]string, error) {
-	headerMap := make(map[string]string)
-	if headers == "" {
-		return headerMap, nil
-	}
+//   - An http.Header containing canonicalized header names, or an error if parsing fails.
+func ParseHeaders(headers []string, allowDuplicates bool) (http.Header, error) {
+	result := make(http.Header, len(headers))
 
-	// Split the headers into key=value pairs
-	pairs := strings.Split(headers, ",")
-	for _, pair := range pairs {
-		trimmedPair := strings.TrimSpace(pair)
-		if trimmedPair == "" {
-			continue // Skip any empty parts resulting from trailing commas
+	for _, raw := range headers {
+		key, value, ok := strings.Cut(raw, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid header format: %s", raw)
 		}
 
-		// Split the pair into key and value
-		parts := strings.SplitN(trimmedPair, "=", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid header format: %s", pair)
-		}
-
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
+		key = http.CanonicalHeaderKey(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
 		if key == "" {
-			return nil, fmt.Errorf("header key cannot be empty: %s", pair)
+			return nil, fmt.Errorf("header key cannot be empty: %s", raw)
 		}
 
-		if _, exists := headerMap[key]; exists && !allowDuplicates {
+		if _, exists := result[key]; exists && !allowDuplicates {
 			return nil, fmt.Errorf("duplicate header key found: %s", key)
 		}
 
-		headerMap[key] = value
+		if allowDuplicates {
+			result.Add(key, value)
+			continue
+		}
+		result.Set(key, value)
 	}
 
-	return headerMap, nil
+	return result, nil
 }

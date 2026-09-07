@@ -1,28 +1,54 @@
 # httputils
 
-The `httputils` package provides utility functions for parsing HTTP headers and status codes from strings. These functions are designed to facilitate working with HTTP-related configurations that are passed as strings, such as environment variables or configuration files.
+The `httputils` package provides small helpers for parsing HTTP headers and status-code expressions used by command-line flags, environment variables, and configuration files.
 
 ## Features
 
-- Parse HTTP status codes and ranges from a string.
-- Parse HTTP headers into a key-value map.
-- Support for handling duplicate headers.
+- Parse HTTP status codes and ranges such as `200,300-302,404`.
+- Parse `Key=Value` header entries into `http.Header`.
+- Canonicalize HTTP header names.
+- Preserve duplicate header values when explicitly allowed.
+- Preserve commas and additional `=` characters inside header values.
 
 ## Installation
 
-To use the `httputils` package, add it to your Go project:
-
 ```sh
-go get github.com/containerish/portpatrol/pkg/httputils
+go get github.com/containeroo/httputils@latest
 ```
 
 ## Usage
 
 ### ParseStatusCodes
 
-Parses a comma-separated string of HTTP status codes and ranges into a slice of integers.
+```go
+package main
 
-__Example:__
+import (
+    "fmt"
+    "log"
+
+    "github.com/containeroo/httputils"
+)
+
+func main() {
+    statusCodes, err := httputils.ParseStatusCodes("200,300-302,404")
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Println(statusCodes)
+}
+```
+
+Output:
+
+```text
+[200 300 301 302 404]
+```
+
+### ParseHeaders
+
+Pass each header as a separate entry. This avoids treating commas inside valid header values as separators.
 
 ```go
 package main
@@ -30,81 +56,37 @@ package main
 import (
     "fmt"
     "log"
-    "httputils"
+
+    "github.com/containeroo/httputils"
 )
 
 func main() {
-    statusString := "200,300-302,404"
-    statusCodes, err := httputils.ParseStatusCodes(statusString)
+    headers, err := httputils.ParseHeaders([]string{
+        "Content-Type=application/json",
+        "Accept=text/html, application/json",
+        "X-Trace=one",
+        "X-Trace=two",
+    }, true)
     if err != nil {
-        log.Fatalf("Error parsing status codes: %v", err)
+        log.Fatal(err)
     }
-    fmt.Println("Parsed Status Codes:", statusCodes)
+
+    fmt.Println(headers.Get("Content-Type"))
+    fmt.Println(headers.Get("Accept"))
+    fmt.Println(headers.Values("X-Trace"))
 }
 ```
 
-__Parameters:__
+Output:
 
-- `statusRanges` (string): Comma-separated string of single status codes (e.g., `200`) and/or ranges (e.g., `200-204`).
-
-__Returns:__
-
-- `[]int`: A slice of status codes.
-- `error`: An error if the parsing fails.
-
-__Output:__
-
-```bash
-Parsed Status Codes: [200 300 301 302 404]
+```text
+application/json
+text/html, application/json
+[one two]
 ```
 
-## ParseHeaders
+`ParseHeaders` canonicalizes header names using `net/http`. When `allowDuplicates` is `false`, repeated names are rejected case-insensitively. When it is `true`, all values are retained in the returned `http.Header`.
 
-Parses a comma-separated string of HTTP headers into a key-value map.
+## Error handling
 
-__Example:__
-
-```go
-package main
-
-import (
-    "fmt"
-    "log"
-    "httputils"
-)
-
-func main() {
-    headerString := "Content-Type=application/json,Authorization=Bearer token,X-Custom-Header="
-    headers, err := httputils.ParseHeaders(headerString, false)
-    if err != nil {
-        log.Fatalf("Error parsing headers: %v", err)
-    }
-    fmt.Println("Parsed Headers:", headers)
-}
-```
-
-__Parameters:__
-
-- `headers` (string): Comma-separated string of headers in `Key=Value` format. Keys must not be empty.
-- `allowDuplicates` (bool): If `true`, overrides previous values for duplicate keys. If `false`, returns an error on duplicate keys.
-
-__Returns:__
-
-- `map[string]string`: A map of header names to values.
-- `error`: An error if the parsing fails.
-
-__Output:__
-
-```bash
-Parsed Headers: map[Content-Type:application/json Authorization:Bearer token X-Custom-Header:]
-
-```
-
-## Error Handling
-
-Both `ParseStatusCodes` and `ParseHeaders` return descriptive errors for invalid input, such as:
-
-- Invalid HTTP status codes or ranges.
-- Empty or malformed header keys.
-- Duplicate header keys (when `allowDuplicates` is `false`).
-
+`ParseStatusCodes` and `ParseHeaders` return errors for malformed input, including invalid status expressions, missing header separators, empty header names, and disallowed duplicate headers.

@@ -1,177 +1,196 @@
 package httputils
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestParseHTTPHeaders(t *testing.T) {
+func TestParseHeaders(t *testing.T) {
 	t.Parallel()
 
-	t.Run("Valid headers", func(t *testing.T) {
+	t.Run("valid headers", func(t *testing.T) {
 		t.Parallel()
 
-		headers := "Content-Type=application/json,Auportpatrolization=Bearer token"
-		result, err := ParseHeaders(headers, true)
+		result, err := ParseHeaders([]string{
+			"Content-Type=application/json",
+			"Authorization=Bearer token",
+		}, false)
 
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual(map[string]string{"Content-Type": "application/json", "Auportpatrolization": "Bearer token"}, result)
+		require.NoError(t, err)
+		assert.Equal(t, http.Header{
+			"Content-Type":  {"application/json"},
+			"Authorization": {"Bearer token"},
+		}, result)
 	})
 
-	t.Run("Single header", func(t *testing.T) {
+	t.Run("canonicalizes header names", func(t *testing.T) {
 		t.Parallel()
 
-		headers := "Content-Type=application/json"
-		result, err := ParseHeaders(headers, true)
+		result, err := ParseHeaders([]string{"content-type=application/json"}, false)
 
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual(map[string]string{"Content-Type": "application/json"}, result)
+		require.NoError(t, err)
+		assert.Equal(t, http.Header{"Content-Type": {"application/json"}}, result)
 	})
 
-	t.Run("Empty headers string", func(t *testing.T) {
+	t.Run("empty headers", func(t *testing.T) {
 		t.Parallel()
 
-		headers := ""
-		result, err := ParseHeaders(headers, true)
+		result, err := ParseHeaders(nil, false)
 
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual(map[string]string{}, result)
+		require.NoError(t, err)
+		assert.Equal(t, http.Header{}, result)
 	})
 
-	t.Run("Malformed header (missing =)", func(t *testing.T) {
+	t.Run("malformed header", func(t *testing.T) {
 		t.Parallel()
 
-		headers := "Content-Type=application/json,AuportpatrolizationBearer token"
-		_, err := ParseHeaders(headers, true)
+		_, err := ParseHeaders([]string{"AuthorizationBearer token"}, false)
 
-		assert.Error(t, err)
-		assert.EqualError(t, err, "invalid header format: AuportpatrolizationBearer token")
+		assert.EqualError(t, err, "invalid header format: AuthorizationBearer token")
 	})
 
-	t.Run("Header with spaces", func(t *testing.T) {
+	t.Run("header with spaces", func(t *testing.T) {
 		t.Parallel()
 
-		headers := "  Content-Type = application/json  , Auportpatrolization = Bearer token  "
-		result, err := ParseHeaders(headers, true)
+		result, err := ParseHeaders([]string{"  Content-Type = application/json  "}, false)
 
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual(map[string]string{"Content-Type": "application/json", "Auportpatrolization": "Bearer token"}, result)
+		require.NoError(t, err)
+		assert.Equal(t, http.Header{"Content-Type": {"application/json"}}, result)
 	})
 
-	t.Run("Header with empty key", func(t *testing.T) {
+	t.Run("header with empty key", func(t *testing.T) {
 		t.Parallel()
 
-		headers := "=value"
-		_, err := ParseHeaders(headers, true)
+		_, err := ParseHeaders([]string{"=value"}, false)
 
-		assert.Error(t, err)
 		assert.EqualError(t, err, "header key cannot be empty: =value")
 	})
 
-	t.Run("Header with empty value", func(t *testing.T) {
+	t.Run("header with empty value", func(t *testing.T) {
 		t.Parallel()
 
-		headers := "key="
-		result, err := ParseHeaders(headers, true)
+		result, err := ParseHeaders([]string{"X-Empty="}, false)
 
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual(map[string]string{"key": ""}, result)
+		require.NoError(t, err)
+		assert.Equal(t, http.Header{"X-Empty": {""}}, result)
 	})
 
-	t.Run("Trailing comma", func(t *testing.T) {
+	t.Run("preserves comma in value", func(t *testing.T) {
 		t.Parallel()
 
-		headers := "Content-Type=application/json,"
-		result, err := ParseHeaders(headers, true)
-		assert.NoError(t, err)
+		result, err := ParseHeaders([]string{"Accept=text/html, application/json"}, false)
 
-		assert.ObjectsAreEqual(map[string]string{"Content-Type": "application/json"}, result)
+		require.NoError(t, err)
+		assert.Equal(t, "text/html, application/json", result.Get("Accept"))
 	})
 
-	t.Run("Valid header with duplicate headers (allowDuplicates=true)", func(t *testing.T) {
+	t.Run("preserves equals in value", func(t *testing.T) {
 		t.Parallel()
 
-		headers := "Content-Type=application/json,Content-Type=application/json"
-		h, err := ParseHeaders(headers, true)
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual(map[string]string{"Content-Type": "application/json"}, h)
+		result, err := ParseHeaders([]string{"Authorization=Signature token=abc123"}, false)
+
+		require.NoError(t, err)
+		assert.Equal(t, "Signature token=abc123", result.Get("Authorization"))
 	})
 
-	t.Run("Invalid header with duplicate headers (allowDuplicates=false)", func(t *testing.T) {
+	t.Run("preserves duplicate headers when allowed", func(t *testing.T) {
 		t.Parallel()
 
-		headers := "Content-Type=application/json,Content-Type=application/json"
-		_, err := ParseHeaders(headers, false)
+		result, err := ParseHeaders([]string{
+			"X-Test=one",
+			"X-Test=two",
+		}, true)
 
-		assert.Error(t, err)
-		assert.EqualError(t, err, "duplicate header key found: Content-Type")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"one", "two"}, result.Values("X-Test"))
+	})
+
+	t.Run("rejects duplicate headers when disabled", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := ParseHeaders([]string{
+			"X-Test=one",
+			"X-Test=two",
+		}, false)
+
+		assert.EqualError(t, err, "duplicate header key found: X-Test")
+	})
+
+	t.Run("duplicate detection is case insensitive", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := ParseHeaders([]string{
+			"x-test=one",
+			"X-Test=two",
+		}, false)
+
+		assert.EqualError(t, err, "duplicate header key found: X-Test")
 	})
 }
 
-func TestParseHTTPStatusCodes(t *testing.T) {
+func TestParseStatusCodes(t *testing.T) {
 	t.Parallel()
 
-	t.Run("Valid status code", func(t *testing.T) {
+	t.Run("valid status code", func(t *testing.T) {
 		t.Parallel()
 
 		statuses, err := ParseStatusCodes("200")
 
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual([]int{200}, statuses)
+		require.NoError(t, err)
+		assert.Equal(t, []int{200}, statuses)
 	})
 
-	t.Run("Valid multiple status codes", func(t *testing.T) {
+	t.Run("valid multiple status codes", func(t *testing.T) {
 		t.Parallel()
 
 		statuses, err := ParseStatusCodes("200,404,500")
 
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual([]int{200, 404, 500}, statuses)
+		require.NoError(t, err)
+		assert.Equal(t, []int{200, 404, 500}, statuses)
 	})
 
-	t.Run("Valid status code range", func(t *testing.T) {
+	t.Run("valid status code range", func(t *testing.T) {
 		t.Parallel()
 
 		statuses, err := ParseStatusCodes("200-202")
 
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual([]int{200, 201, 202}, statuses)
+		require.NoError(t, err)
+		assert.Equal(t, []int{200, 201, 202}, statuses)
 	})
 
-	t.Run("Valid multiple status code ranges", func(t *testing.T) {
+	t.Run("valid multiple status code ranges", func(t *testing.T) {
 		t.Parallel()
 
 		statuses, err := ParseStatusCodes("200-202,300-301,500")
 
-		assert.NoError(t, err)
-		assert.ObjectsAreEqual([]int{200, 201, 202, 300, 301, 500}, statuses)
+		require.NoError(t, err)
+		assert.Equal(t, []int{200, 201, 202, 300, 301, 500}, statuses)
 	})
 
-	t.Run("Invalid status code", func(t *testing.T) {
+	t.Run("invalid status code", func(t *testing.T) {
 		t.Parallel()
 
 		_, err := ParseStatusCodes("abc")
 
-		assert.Error(t, err)
 		assert.EqualError(t, err, "invalid status code: abc")
 	})
 
-	t.Run("Invalid status range double dash", func(t *testing.T) {
+	t.Run("invalid status range double dash", func(t *testing.T) {
 		t.Parallel()
 
 		_, err := ParseStatusCodes("200--202")
 
-		assert.Error(t, err)
 		assert.EqualError(t, err, "invalid status range: 200--202")
 	})
 
-	t.Run("Invalid status range (start > end)", func(t *testing.T) {
+	t.Run("invalid status range start greater than end", func(t *testing.T) {
 		t.Parallel()
 
 		_, err := ParseStatusCodes("201-200")
 
-		assert.Error(t, err)
 		assert.EqualError(t, err, "invalid status range: 201-200")
 	})
 }
